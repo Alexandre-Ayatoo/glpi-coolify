@@ -1,0 +1,44 @@
+services:
+  glpi:
+    image: glpi/glpi:10.0.28
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "80"
+    environment:
+      TZ: Europe/Paris
+      GLPI_DB_HOST: db
+      GLPI_DB_PORT: "3306"
+      GLPI_DB_NAME: glpi
+      GLPI_DB_USER: glpi
+      GLPI_DB_PASSWORD: ${GLPI_DB_PASSWORD:?}
+      GLPI_SKIP_AUTOINSTALL: "true"
+      GLPI_SKIP_AUTOUPDATE: "true"
+      GLPI_CRONTAB_ENABLED: "${GLPI_CRONTAB_ENABLED:-0}"
+    volumes:
+      - ${GLPI_STORAGE_PATH:-/data/glpi}/data:/var/glpi
+      - ${GLPI_STORAGE_PATH:-/data/glpi}/marketplace:/var/www/glpi/marketplace
+      - ${GLPI_STORAGE_PATH:-/data/glpi}/plugins:/var/www/glpi/plugins
+
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      MARIADB_DATABASE: glpi
+      MARIADB_USER: glpi
+      MARIADB_PASSWORD: ${GLPI_DB_PASSWORD:?}
+      MARIADB_ROOT_PASSWORD: ${GLPI_DB_ROOT_PASSWORD:?}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  db_data:
