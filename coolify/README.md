@@ -79,7 +79,10 @@ transférer `/root/glpi-migration/` par SSH/SCP. Pour une nouvelle destination v
 set -euo pipefail
 cd /root/glpi-migration
 sha256sum -c SHA256SUMS
-test ! -e /data/glpi
+test ! -e /data/glpi/restore
+test ! -e /data/glpi/data
+test ! -e /data/glpi/marketplace
+test ! -e /data/glpi/plugins
 install -d /data/glpi/restore /data/glpi/data
 tar -xzpf glpi-data.tar.gz -C /data/glpi/restore
 mv /data/glpi/restore/config /data/glpi/data/
@@ -93,8 +96,9 @@ chmod 750 /data/glpi/data/config
 find /data/glpi/data/config -type f -exec chmod 640 {} +
 ```
 
-Si `/data/glpi` existe déjà, inspecter son contenu au lieu de l'écraser ou de
-réexécuter ce bloc. Adapter les chemins si `GLPI_STORAGE_PATH` a été modifié.
+Si une des destinations existe déjà, inspecter son contenu au lieu de l'écraser
+ou de réexécuter ce bloc. Les chemins sont explicites dans le Compose ; pour
+les changer, modifier les champs `source` et adapter les commandes ci-dessus.
 Conserver `config/config_db.php` et **glpicrypt.key** restaurés. Pour la base
 existante, ne pas remplacer l'hôte par `db` : il reste `bdd.alexandre-lb.fr`.
 Vérifier que les quatre propriétés SQL correspondent aux variables Coolify.
@@ -105,6 +109,31 @@ Déployer sans ouvrir l'accès public à l'application. Le conteneur doit pouvoi
 résoudre le nom de la base et joindre son port 3306. Autoriser la source réseau
 réelle du serveur Coolify sur le pare-feu et dans les droits SQL de `glpiuser`.
 `localhost` dans un conteneur désigne le conteneur lui-même.
+
+### Vérifier le stockage et le routage Coolify
+
+Après modification du Compose dans Git, recharger sa définition dans Coolify
+avant de redéployer. Dans Persistent Storage, vérifier les chemins ci-dessous
+et retirer les anciennes entrées incorrectes vers `/data`, `/marketplace` ou
+`/plugins` si elles ont été conservées. Ne pas supprimer les données sur disque.
+
+| Source sur web-1 | Destination dans le conteneur |
+| --- | --- |
+| `/data/glpi/data` | `/var/glpi` |
+| `/data/glpi/marketplace` | `/var/www/glpi/marketplace` |
+| `/data/glpi/plugins` | `/var/www/glpi/plugins` |
+
+Le Compose emploie la syntaxe longue des montages avec des chemins fixes pour
+éviter une mauvaise interprétation des séparateurs par Coolify. Les dossiers
+doivent être préparés avant de déployer (`create_host_path: false`).
+
+Dans Domains, associer explicitement le domaine au **service glpi, port 80**.
+Le nom de l'application Coolify ne configure pas à lui seul le routage.
+Si le conteneur répond en HTTP mais n'a aucun label `traefik.*`, vérifier cette
+association et que la génération des labels du proxy n'a pas été désactivée.
+Si GLPI redirige vers `install/install.php`, vérifier que `config_db.php` et les
+données restaurées sont bien visibles dans `/var/glpi`. Ne pas lancer une
+nouvelle installation sur la base existante.
 
 Repérer le conteneur GLPI puis vérifier la connexion sans afficher le mot de passe :
 

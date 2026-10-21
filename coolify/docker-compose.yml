@@ -15,6 +15,18 @@ services:
       GLPI_SKIP_AUTOUPDATE: "true"
       GLPI_CRONTAB_ENABLED: "${GLPI_CRONTAB_ENABLED:-0}"
     volumes:
-      - ${GLPI_STORAGE_PATH:-/data/glpi}/data:/var/glpi
-      - ${GLPI_STORAGE_PATH:-/data/glpi}/marketplace:/var/www/glpi/marketplace
-      - ${GLPI_STORAGE_PATH:-/data/glpi}/plugins:/var/www/glpi/plugins
+      - type: bind
+        source: /data/glpi/data
+        target: /var/glpi
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/glpi/marketplace
+        target: /var/www/glpi/marketplace
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/glpi/plugins
+        target: /var/www/glpi/plugins
+        bind:
+          create_host_path: false
