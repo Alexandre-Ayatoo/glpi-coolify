@@ -1,39 +1,50 @@
 # GLPI sur Coolify — gestion.alexandre-lb.fr
 
-Ce déploiement migre l'instance GLPI 10.0.17 de `web-1` vers l'image officielle
-GLPI **10.0.28**, avec MariaDB **10.11**. Le tag Docker 10.0.17 n'est pas publié.
-La mise à jour du schéma de la base sera lancée manuellement après restauration.
+Ce Compose utilise l'image officielle **GLPI 10.0.28** avec la **base distante
+existante** : `bdd.alexandre-lb.fr:3306`, base `glpidb`, utilisateur `glpiuser`.
+Il ne crée aucun serveur MariaDB et ne demande aucun mot de passe root SQL.
+Le `mysql --version` fourni initialement décrit le client de web-1, pas la
+version réelle du serveur distant.
 
-Le fork contient les sources GLPI de la branche `12.0/bugfixes`. Ce Compose
+Le fork contient les sources de la branche `12.0/bugfixes`. Ce déploiement
 utilise l'image publiée 10.0.28 : les modifications des sources du fork ne sont
-pas intégrées à l'image. Le Compose à la racine est destiné au développement ;
-utiliser exclusivement `coolify/docker-compose.yml` pour ce déploiement.
+pas intégrées à l'image. Le Compose à la racine sert au développement.
 
-## Configurer Coolify
+## Réglages Coolify
 
-1. Créer une application depuis `Alexandre-Ayatoo/glpi-coolify`.
-2. Sélectionner la branche contenant ces fichiers (actuellement `12.0/bugfixes`).
-3. Choisir **Docker Compose**, répertoire de base `/`, fichier
-   **`/coolify/docker-compose.yml`**.
-4. Renseigner `GLPI_DB_PASSWORD` et `GLPI_DB_ROOT_PASSWORD` avec deux secrets
-   distincts. Générer chacun avec `openssl rand -hex 32`.
-5. Garder `GLPI_STORAGE_PATH=/data/glpi` et `GLPI_CRONTAB_ENABLED=0`.
-6. Préparer les fichiers ci-dessous avant le premier déploiement. Garder les
-   déploiements automatiques désactivés pendant la migration.
-7. Ne pas attribuer le domaine de production avant les contrôles. Pour les
-   essais, utiliser un domaine temporaire dont le DNS pointe vers Coolify,
-   affecté au service `glpi`, port interne **80**.
+- Dépôt : `Alexandre-Ayatoo/glpi-coolify`, branche `12.0/bugfixes`.
+- Build : **Docker Compose**, répertoire `/`, fichier `/coolify/docker-compose.yml`.
+- Service HTTP : `glpi`, port interne **80**. Coolify gère HTTPS.
+- Variables : reprendre `coolify/.env.example` et saisir le mot de passe SQL
+  existant dans `GLPI_DB_PASSWORD`, uniquement dans Coolify.
+- Rendre les variables disponibles pendant **Build time et Runtime** : Coolify
+  lit aussi le Compose avec son fichier `build-time.env`.
+- Garder `GLPI_CRONTAB_ENABLED=0` jusqu'à la fin de la migration et les
+  déploiements automatiques désactivés pendant l'opération.
+- Supprimer l'ancienne variable `GLPI_DB_ROOT_PASSWORD` si elle avait été ajoutée.
 
-Coolify gère HTTPS. Aucun port hôte ni certificat Nginx/Certbot n'est nécessaire.
-MariaDB reste sur le réseau privé de l'application.
+L'installation et la mise à jour automatiques sont désactivées. Les variables
+SQL servent notamment aux contrôles réseau de l'image ; elles ne réécrivent
+pas le fichier restauré `config_db.php`. Conserver les mêmes identifiants dans
+les deux endroits. Ne pas mettre le mot de passe ni les sauvegardes dans Git.
+
+## Préparer la migration
+
+Le passage **10.0.17 → 10.0.28** nécessite une mise à jour manuelle de la base.
+Si la cible est `glpidb`, cette opération modifie la base de production distante.
+Avant toute mise à jour, arrêter l'ancien GLPI, ses accès web/API/inventaire et
+ses tâches cron/collecteurs, et disposer d'une sauvegarde SQL et des fichiers.
+Le mode maintenance seul n'arrête pas toutes les écritures externes.
+Ne pas arrêter globalement les services partagés avec d'autres sites.
+
+Pour tester en parallèle, faire préparer une **copie séparée de la base** et
+modifier à la fois les variables Coolify et le `config_db.php` de la copie.
+Ne pas faire tourner les deux versions sur la même base. Ne pas lancer de
+collecteurs, notifications ni tâches automatiques pendant les essais.
 
 ## Sauvegarder sur web-1
 
-Exécuter comme root, dans Bash, pendant une fenêtre de maintenance. Arrêter les
-tâches cron GLPI et collecteurs sur l'ancien serveur et bloquer temporairement
-les accès web/API et inventaires avant le dump final. Le mode maintenance seul
-ne garantit pas l'arrêt de toutes les écritures. Ne pas arrêter globalement les
-services cron ou Nginx qui servent d'autres applications.
+Comme root dans Bash, après arrêt des écritures :
 
 ```bash
 set -euo pipefail
@@ -41,16 +52,11 @@ cd /var/www/html/gestion.alexandre-lb.fr
 sudo -u www-data php8.3 bin/console maintenance:enable
 install -d -m 700 /root/glpi-migration
 umask 077
-```
-
-Lire localement `config/config_db.php` pour identifier la base. Pour une base
-locale avec accès root par socket, remplacer le nom puis lancer :
-
-```bash
-GLPI_SOURCE_DB='REMPLACER_PAR_LE_NOM_EXISTANT'
-mariadb-dump --single-transaction --quick --hex-blob \
-  --default-character-set=utf8mb4 "$GLPI_SOURCE_DB" \
-  > /root/glpi-migration/glpi.sql
+mariadb --host=bdd.alexandre-lb.fr --port=3306 --user=glpiuser --password \
+  glpidb -e 'SELECT VERSION();'
+mariadb-dump --host=bdd.alexandre-lb.fr --port=3306 \
+  --user=glpiuser --password --single-transaction --quick --hex-blob \
+  --default-character-set=utf8mb4 glpidb > /root/glpi-migration/glpi.sql
 test -s /root/glpi-migration/glpi.sql
 tar -czpf /root/glpi-migration/glpi-data.tar.gz \
   -C /var/www/html/gestion.alexandre-lb.fr config files marketplace plugins
@@ -58,19 +64,16 @@ cd /root/glpi-migration
 sha256sum glpi.sql glpi-data.tar.gz > SHA256SUMS
 ```
 
-Si la base est distante ou que root utilise une autre authentification, adapter
-le dump (`--host`, `--user`, `--password` sans valeur pour demander le secret).
-Ne pas continuer après une erreur. `--single-transaction` suppose des tables
-InnoDB ; toute table non transactionnelle doit rester sans écritures durant le dump.
+Le client demande le mot de passe sans le placer dans la commande. Vérifier
+que le dump réussit ; en cas de droits insuffisants, le faire réaliser par
+l'administrateur de la base. `--single-transaction` suppose des tables InnoDB ;
+les tables non transactionnelles doivent rester sans écritures pendant le dump.
+Conserver la sauvegarde hors du serveur et hors Git.
 
-Transférer le dossier `/root/glpi-migration/` sur le serveur Coolify par SSH/SCP.
-Conserver une copie séparée de ces sauvegardes. Ne jamais les ajouter à Git.
+## Préparer les fichiers sur l'hôte Coolify
 
-## Préparer les fichiers sur le serveur Coolify
-
-Exécuter comme root, uniquement pour une **nouvelle destination vide**. Si
-`/data/glpi` existe déjà avec des données, arrêter et vérifier son contenu.
-Adapter tous les chemins si `GLPI_STORAGE_PATH` a été changé.
+Si Coolify est également sur `web-1`, les sauvegardes y sont déjà ; sinon,
+transférer `/root/glpi-migration/` par SSH/SCP. Pour une nouvelle destination vide :
 
 ```bash
 set -euo pipefail
@@ -88,115 +91,90 @@ mkdir -p /data/glpi/data/logs
 chown -R 33:33 /data/glpi
 chmod 750 /data/glpi/data/config
 find /data/glpi/data/config -type f -exec chmod 640 {} +
-nano /data/glpi/data/config/config_db.php
 ```
 
-Dans le fichier restauré, modifier les quatre propriétés suivantes, en conservant
-les autres réglages. Le mot de passe doit correspondre à celui saisi dans Coolify :
+Si `/data/glpi` existe déjà, inspecter son contenu au lieu de l'écraser ou de
+réexécuter ce bloc. Adapter les chemins si `GLPI_STORAGE_PATH` a été modifié.
+Conserver `config/config_db.php` et **glpicrypt.key** restaurés. Pour la base
+existante, ne pas remplacer l'hôte par `db` : il reste `bdd.alexandre-lb.fr`.
+Vérifier que les quatre propriétés SQL correspondent aux variables Coolify.
 
-```php
-public $dbhost = 'db';
-public $dbuser = 'glpi';
-public $dbpassword = 'VALEUR_DE_GLPI_DB_PASSWORD';
-public $dbdefault = 'glpi';
-```
+## Déployer et vérifier la connexion
 
-Garder impérativement `glpicrypt.key` et les autres clés éventuelles. Les variables
-d'environnement ne réécrivent pas le `config_db.php` restauré.
+Déployer sans ouvrir l'accès public à l'application. Le conteneur doit pouvoir
+résoudre le nom de la base et joindre son port 3306. Autoriser la source réseau
+réelle du serveur Coolify sur le pare-feu et dans les droits SQL de `glpiuser`.
+`localhost` dans un conteneur désigne le conteneur lui-même.
 
-Déployer maintenant dans Coolify. L'installation, les mises à jour automatiques
-et les tâches GLPI sont désactivées pendant la restauration. L'application peut
-présenter une erreur de base vide tant que l'import n'est pas terminé.
-
-## Importer et mettre à jour
-
-Repérer les conteneurs de cette application sur le serveur Coolify :
+Repérer le conteneur GLPI puis vérifier la connexion sans afficher le mot de passe :
 
 ```bash
 docker ps --format 'table {{.ID}}\t{{.Names}}\t{{.Image}}'
 GLPI_CID='REMPLACER_PAR_ID_GLPI'
-DB_CID='REMPLACER_PAR_ID_MARIADB'
+docker exec "$GLPI_CID" php -r '
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$db = new mysqli(getenv("GLPI_DB_HOST"), getenv("GLPI_DB_USER"),
+    getenv("GLPI_DB_PASSWORD"), getenv("GLPI_DB_NAME"), (int)getenv("GLPI_DB_PORT"));
+echo "Connexion SQL OK", PHP_EOL;
+'
 ```
 
-Contrôler la destination. Le résultat doit être **0** :
+Il n'y a **aucun dump à importer dans la base existante**. Le dump est la
+sauvegarde de retour arrière. Pour un test sur une copie, l'administrateur SQL
+restaure le dump dans une nouvelle base vide, jamais sur `glpidb` en activité.
+
+## Mettre à jour et basculer
+
+Seulement après sauvegarde vérifiée et arrêt de l'ancien GLPI :
 
 ```bash
-docker exec "$DB_CID" sh -c \
-  'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" -Nse "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=\"glpi\""'
-```
-
-Importer une seule fois dans cette base vide. Arrêter immédiatement si une
-commande échoue ; ne pas relancer un import sur une base partiellement remplie.
-
-```bash
-docker exec -i "$DB_CID" sh -c \
-  'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" glpi' \
-  < /root/glpi-migration/glpi.sql
-
 docker exec -u www-data "$GLPI_CID" \
   php bin/console database:update --no-interaction
 docker exec -u www-data "$GLPI_CID" php bin/console database:check_schema_integrity
 docker exec -u www-data "$GLPI_CID" php bin/console cache:clear
 ```
 
-Vérifier la sortie de chaque commande. Toute différence de schéma doit être
-expliquée avant la bascule. La mise à jour peut désactiver les extensions : ne
-réactiver que les versions compatibles avec GLPI 10.0.28.
+Arrêter si une commande échoue. Vérifier toute différence de schéma avant la
+bascule. Les extensions peuvent être désactivées par la mise à jour ; vérifier
+leur compatibilité avec GLPI 10.0.28 avant de les réactiver.
 
-## Valider et basculer
-
-Sur la nouvelle instance :
+Après validation, désactiver la maintenance sur la nouvelle instance :
 
 ```bash
 docker exec -u www-data "$GLPI_CID" php bin/console maintenance:disable
 ```
 
-Sur le domaine temporaire, vérifier connexion, tickets, téléchargement d'anciens
-documents, droits, API/inventaire et les 16 extensions : accounts, activity,
-actualtime, additionalalerts, addressing, advancedplanning, connections,
-escalade, moreticket, mydashboard, news, onetimesecret, pdf, satisfaction,
-screenshot et tag. Ne pas démarrer les collecteurs durant les essais.
+Puis affecter `https://gestion.alexandre-lb.fr` au service `glpi`, port 80, et
+basculer les DNS A/AAAA si nécessaire. Si l'ancien Nginx sert toujours le domaine,
+retirer son routage GLPI avant d'ouvrir le nouveau service ; la maintenance est
+stockée dans la base partagée et ne protège pas séparément l'ancienne instance.
+Sur un même serveur, vérifier aussi que Nginx et le proxy Coolify ne se disputent
+pas les ports 80/443.
 
-Après validation, affecter `https://gestion.alexandre-lb.fr` au service `glpi`,
-port interne 80, et basculer les DNS A **et AAAA** concernés vers Coolify.
-Vérifier aussi l'URL de l'application dans la configuration générale GLPI.
-Passer `GLPI_CRONTAB_ENABLED=1` dans Coolify puis redéployer. Les actions
-automatiques exécutées par le conteneur nécessitent le mode CLI dans GLPI.
-Vérifier les notifications SMTP, les collecteurs et un inventaire réel après
-la bascule. Ne pas programmer un deuxième cron pour la même instance.
+Vérifier connexion, tickets, anciens documents, droits, API/inventaire, LDAP,
+SMTP et les 16 extensions présentes dans `marketplace`. Reprendre l'URL de
+production dans la configuration générale GLPI. Passer ensuite
+`GLPI_CRONTAB_ENABLED=1` dans Coolify et redéployer ; vérifier les actions
+automatiques en mode CLI et les collecteurs. Ne pas ajouter un deuxième cron.
+L'ancien GLPI doit rester inaccessible et ses tâches arrêtées.
 
-Garder l'ancien serveur en maintenance et ses tâches arrêtées.
+## Retour arrière et sauvegardes régulières
 
-## Retour arrière et sauvegardes
+Avant `database:update`, on peut arrêter la nouvelle application et rétablir
+l'ancien accès. Après `database:update`, arrêter toutes les écritures et faire
+restaurer la sauvegarde SQL 10.0.17 par l'administrateur sur une destination
+propre, avec les fichiers cohérents, avant de relancer l'ancien code. Un simple
+retour DNS ne restaure pas le schéma. Les écritures intervenues après la
+sauvegarde nécessitent un plan de récupération avant tout retour arrière.
 
-Avant toute écriture sur la nouvelle instance, le retour arrière consiste à
-arrêter les conteneurs depuis Coolify, rétablir les DNS puis rétablir l'accès et
-les tâches sur l'ancien serveur et y lancer :
+Sauvegarder ensemble **la base distante et `/data/glpi`**. Coolify ne sauvegarde
+pas automatiquement la base distante avec les fichiers. Une rotation SQL du mot
+de passe doit aussi être reportée dans Coolify et dans `config_db.php`.
 
-```bash
-cd /var/www/html/gestion.alexandre-lb.fr
-sudo -u www-data php8.3 bin/console maintenance:disable
-```
-
-Après des écritures sur la nouvelle instance, un retour DNS seul perdrait ces
-changements : il faut d'abord organiser leur récupération. Ne pas importer une
-base mise à jour vers 10.0.28 dans l'ancien code 10.0.17.
-
-Sauvegarder régulièrement **le dump MariaDB et `/data/glpi` ensemble**. La base
-est dans le volume nommé `db_data`, préfixé par le projet Coolify ; elle n'est
-pas dans `/data/glpi`. Conserver les clés hors Git. Un changement des mots de
-passe dans Coolify ne modifie pas les comptes d'une base déjà initialisée :
-effectuer aussi la rotation SQL et mettre à jour `config_db.php`.
-
-Pour une future mise à jour, sauvegarder, activer la maintenance, changer le tag
-GLPI explicitement, redéployer puis lancer `database:update` manuellement.
-
-## Vérifier le Compose sans déployer
-
-Depuis la racine du dépôt, avec deux valeurs fictives uniquement pour le contrôle :
+## Vérification locale du Compose
 
 ```bash
-GLPI_DB_PASSWORD=validation GLPI_DB_ROOT_PASSWORD=validation-root \
+GLPI_DB_PASSWORD=validation \
   docker compose -f coolify/docker-compose.yml config --quiet
 ```
 

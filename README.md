@@ -10,7 +10,8 @@
 La configuration pour migrer `gestion.alexandre-lb.fr` depuis GLPI 10.0.17 est
 dans [coolify/README.md](coolify/README.md). Utiliser
 `/coolify/docker-compose.yml` dans Coolify. Elle utilise l'image officielle
-GLPI 10.0.28 et MariaDB 10.11 ; le Compose à la racine sert au développement.
+GLPI 10.0.28 et la base distante existante sur `bdd.alexandre-lb.fr` ; le Compose
+à la racine sert au développement.
 
 ## About GLPI
 
